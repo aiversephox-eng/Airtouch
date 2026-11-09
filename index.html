@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AirTouch – hands-free control</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--tx:#14161a;--ac:#2f6bff;--mu:#6b7280;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1115;--card:#1b1e25;--tx:#eef0f4;--ac:#5b8bff;--mu:#9aa3b2}}
+:root[data-theme="dark"]{--bg:#0f1115;--card:#1b1e25;--tx:#eef0f4;--ac:#5b8bff;--mu:#9aa3b2}
+*{box-sizing:border-box}html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+#app{max-width:480px;margin:0 auto;height:100%;display:flex;flex-direction:column;padding:12px}
+h1{font-size:20px;margin:0 0 2px}.sub{color:var(--mu);font-size:13px;margin:0 0 8px}
+#screen{flex:1;background:var(--card);border-radius:22px;padding:14px;display:flex;flex-direction:column;gap:10px;overflow:auto;position:relative}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;flex:1}
+.t{border:2px solid transparent;background:var(--bg);color:var(--tx);border-radius:16px;font-size:17px;font-weight:600;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:10px;min-height:76px;text-align:center;font-family:inherit}
+.t .e{font-size:30px}.t.hov{border-color:var(--ac)}.wide{grid-column:span 2}
+.row{display:flex;gap:8px;flex:none}.row .t{flex:1;min-height:64px}
+.view{flex:1;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff;text-align:center;padding:12px}
+#feed{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;scroll-behavior:smooth}
+.item{background:var(--bg);border-radius:12px;padding:12px}
+#cur{position:fixed;left:0;top:0;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;pointer-events:none;z-index:9;display:none;background:conic-gradient(var(--ac) calc(var(--p,0)*1turn),rgba(127,127,127,.25) 0);-webkit-mask:radial-gradient(circle,transparent 14px,#000 15px);mask:radial-gradient(circle,transparent 14px,#000 15px)}
+#dot{position:fixed;left:0;top:0;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:var(--ac);pointer-events:none;z-index:9;display:none}
+#cam{position:fixed;right:10px;top:calc(10px + env(safe-area-inset-top,0px));width:96px;height:72px;border-radius:10px;overflow:hidden;border:2px solid var(--ac);z-index:8;display:none;background:#000}
+#cam canvas{width:100%;height:100%;display:block}
+#msg{position:fixed;left:0;right:0;top:35%;text-align:center;z-index:10;font-size:22px;font-weight:700;pointer-events:none;text-shadow:0 1px 8px var(--bg)}
+.btn{background:var(--ac);color:#fff;border:0;border-radius:14px;padding:14px 18px;font-size:17px;font-weight:600;width:100%;display:block;text-align:center;text-decoration:none;font-family:inherit}
+input,textarea{width:100%;padding:12px;border-radius:12px;border:1px solid var(--mu);background:var(--bg);color:var(--tx);font-size:15px}
+#toast{position:fixed;left:50%;top:14px;transform:translateX(-50%);background:var(--ac);color:#fff;padding:6px 14px;border-radius:99px;font-size:13px;opacity:0;transition:opacity .2s;z-index:11;white-space:nowrap}
+.tips{font-size:13px;color:var(--mu);margin:0}
+</style></head><body>
+<div id="app"><h1>🖐️ AirTouch</h1><p class="sub" id="sub">Control apps &amp; YouTube with hand gestures</p><div id="screen"></div></div>
+<div id="cur"></div><div id="dot"></div><div id="toast"></div><div id="msg"></div>
+<div id="cam"><canvas id="mask" width="80" height="60"></canvas></div>
+<video id="v" playsinline muted style="display:none"></video>
+<canvas id="w" width="80" height="60" style="display:none"></canvas>
+<script>
+const $=id=>document.getElementById(id),S=$('screen'),msg=$('msg');
+const W=80,H=60,ROI=Math.floor(H*.28);
+let screen='home',track=0,gal=0,light=false,playing=false,running=false,cal=null,openArea=0,count=0;
+let mp=false,hands=null,lm=null,lmT=0,busy=false,ytSrc='',ytT=0,ytV=100,ytS=-1;
+let DW=10,ytQ=[],ytIdx=0,wl=null,aw=false;try{DW=+localStorage.getItem('atDW')||10}catch(e){}
+const tracks=['Lo-fi Study Beats','Focus Flow','Rain Sounds','Piano Calm'],cols=['#e5484d','#2f6bff','#12a594','#f5a524','#8e4ec6'];
+function toast(t){const e=$('toast');e.textContent=t;e.style.opacity=1;clearTimeout(toast.k);toast.k=setTimeout(()=>e.style.opacity=0,1100)}
+const back='<button class="t" data-a="home" style="min-height:52px;flex:none">⬅ Home</button>';
+const vid=s=>{s=(s||'').trim();const i=s.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{11})/);return i?i[1]:(/^[\w-]{11}$/.test(s)?s:null)};
+function buildYt(s){s=(s||'').trim();let id='jfKfPfyJRdk',list='';
+ const l=s.match(/[?&]list=([\w-]+)/),i=s.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{11})/);
+ if(l)list=l[1];if(i)id=i[1];else if(/^[\w-]{11}$/.test(s))id=s;
+ return`https://www.youtube.com/embed/${list&&!i?'videoseries':id}?enablejsapi=1&playsinline=1&autoplay=1&mute=1&rel=0&origin=${encodeURIComponent(location.origin)}${list?'&list='+list:''}`}
+function render(){
+ if(screen==='home')S.innerHTML=`<div class="grid"><button class="t wide" data-a="yt"><span class="e">▶️</span>YouTube</button><button class="t" data-a="music"><span class="e">🎵</span>Music</button><button class="t" data-a="gallery"><span class="e">🖼️</span>Gallery</button><button class="t" data-a="feed"><span class="e">📰</span>Feed</button><button class="t" data-a="light"><span class="e">🔦</span>Light ${light?'ON':'OFF'}</button></div><p class="tips">Point at a tile &amp; hold still (or pinch thumb+index) to select. Swipe hand left/right. Fist = Home (play/pause in YouTube).</p><label class="tips">Hold-to-click time: <b id="dwv">${DW}</b>s<input type="range" id="dw" min="1" max="15" value="${DW}" style="padding:0"></label>`;
+ if(screen==='music')S.innerHTML=`${back}<div class="view" style="background:${cols[track%5]}">${playing?'▶':'⏸'}<br>${tracks[track]}</div><div class="row"><button class="t" data-a="prev">⏮</button><button class="t" data-a="play">${playing?'⏸':'▶'}</button><button class="t" data-a="next">⏭</button></div>`;
+ if(screen==='gallery')S.innerHTML=`${back}<div class="view" style="background:${cols[gal%5]}">Photo ${gal+1}<br><small>swipe ← →</small></div><div class="row"><button class="t" data-a="gprev">◀</button><button class="t" data-a="gnext">▶</button></div>`;
+ if(screen==='feed')S.innerHTML=`${back}<div id="feed">${Array.from({length:14},(_,i)=>`<div class="item"><b>Post ${i+1}</b><br><span style="color:var(--mu)">Scroll by hand signal only.</span></div>`).join('')}</div><div class="row"><button class="t" data-a="up">▲</button><button class="t" data-a="down">▼</button></div>`;
+ if(screen==='yt')S.innerHTML=`${back}<iframe id="yt" src="${ytSrc}" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen onload="this.contentWindow.postMessage(JSON.stringify({event:'listening',id:1,channel:'widget'}),'*')" style="width:100%;aspect-ratio:16/9;border:0;border-radius:12px;flex:none;background:#000"></iframe><div class="row"><button class="t" data-a="ytback">⏪ 10s</button><button class="t" data-a="ytplay">⏯</button><button class="t" data-a="ytfwd">10s ⏩</button></div><div class="row"><button class="t" data-a="ytvdn">🔉</button><button class="t" data-a="ytmute">🔊 Sound</button><button class="t" data-a="ytvup">🔊+</button></div><div class="row"><button class="t" data-a="ytprev">⏮ Prev</button><button class="t" data-a="ytnext">Next ⏭</button></div>`;
+ S.style.background=light?'#fff':'';S.style.color=light?'#111':'';
+}
+function yc(f,a=[]){const y=$('yt');if(y&&y.contentWindow)y.contentWindow.postMessage(JSON.stringify({event:'command',func:f,args:a}),'*')}
+window.addEventListener('message',e=>{if(typeof e.data!=='string'||!/youtube/.test(e.origin))return;try{const i=JSON.parse(e.data).info;if(i){if(i.currentTime!=null)ytT=i.currentTime;if(i.volume!=null)ytV=i.volume;if(i.playerState!=null)ytS=i.playerState}}catch(_){}});
+function ytGo(d){if(ytQ.length>1){ytIdx=(ytIdx+d+ytQ.length)%ytQ.length;yc('loadVideoById',[ytQ[ytIdx]])}else yc(d>0?'nextVideo':'previousVideo')}
+function act(a){
+ if(a[0]==='y'&&a!=='yt'){
+  ({ytplay:()=>yc(ytS===1?'pauseVideo':'playVideo'),ytback:()=>yc('seekTo',[Math.max(0,ytT-10),true]),ytfwd:()=>yc('seekTo',[ytT+10,true]),
+   ytvup:()=>yc('setVolume',[Math.min(100,ytV+15)]),ytvdn:()=>yc('setVolume',[Math.max(0,ytV-15)]),ytmute:()=>{yc('unMute');yc('setVolume',[80])},
+   ytnext:()=>ytGo(1),ytprev:()=>ytGo(-1)})[a]();return}
+ if(['home','music','gallery','feed','yt'].includes(a))screen=a;
+ else if(a==='light')light=!light;else if(a==='play')playing=!playing;
+ else if(a==='next')track=(track+1)%4;else if(a==='prev')track=(track+3)%4;
+ else if(a==='gnext')gal=(gal+1)%5;else if(a==='gprev')gal=(gal+4)%5;
+ else if(a==='up')$('feed').scrollTop-=140;else if(a==='down')$('feed').scrollTop+=140;
+ render();
+}
+S.addEventListener('click',e=>{const b=e.target.closest('.t');if(b)act(b.dataset.a)});
+S.addEventListener('input',e=>{if(e.target.id==='dw'){DW=+e.target.value;$('dwv').textContent=DW;try{localStorage.setItem('atDW',DW)}catch(_){}}});
+// ---------- camera ----------
+const v=$('v'),wc=$('w'),wx=wc.getContext('2d',{willReadFrequently:true}),mc=$('mask'),mx=mc.getContext('2d');
+const cbcr=(r,g,b)=>[128-.168736*r-.331264*g+.5*b,128+.5*r-.418688*g-.081312*b];
+function fail(e){
+ const n=(e&&e.name)||'Unsupported',dg=`secure:${isSecureContext} · ${location.protocol} · framed:${top!==self} · camAPI:${!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)}`,why=!isSecureContext?'This page is not on a secure (https) address, so the browser blocks the camera silently. Host the file on https (GitHub Pages) and open that link.':n==='NotAllowedError'?'Camera permission was denied or blocked by this embedded view. Allow it in the address-bar camera icon / site settings, or open the page outside the Claude app.':'This view cannot open the camera. Open the https link in Chrome or Safari.';
+ S.innerHTML=`<p><b>Camera not available (${n}).</b></p><p class="tips">${why}</p><p class="tips" style="font-size:11px">${dg}</p><a class="btn" href="${location.href}" target="_blank" rel="noopener">Open in browser tab</a><button class="btn" style="margin-top:8px" onclick="navigator.clipboard&&navigator.clipboard.writeText(location.href);toast('Link copied')">Copy link</button><button class="btn" style="margin-top:8px" onclick="location.reload()">Try again</button>`}
+async function startCam(){
+ let st=null,err=null;
+ if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)return fail(null);
+ for(const c of[{video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},audio:false},{video:true,audio:false}]){try{st=await navigator.mediaDevices.getUserMedia(c);break}catch(e){err=e;if(e.name==='NotAllowedError')break}}
+ if(!st)return fail(err);
+ v.srcObject=st;try{await v.play()}catch(_){}
+ $('cam').style.display='block';$('cur').style.display=$('dot').style.display='block';
+ msg.textContent='Loading hand AI…';await initMP();msg.textContent='';
+ $('sub').textContent=mp?'AI hand tracking on · pinch to click':'Basic colour tracking · hold still to click';
+ keepAwake().then(()=>{if(aw)$('sub').textContent+=' · screen stays on'});
+ render();running=true;if(!mp)calibrate();
+}
+async function keepAwake(){
+ try{wl=await navigator.wakeLock.request('screen');aw=true;wl.addEventListener('release',()=>wl=null);return}catch(e){}
+ try{const c=document.createElement('canvas');c.width=c.height=16;const x=c.getContext('2d');setInterval(()=>{x.fillStyle='hsl('+Math.random()*360+',50%,50%)';x.fillRect(0,0,16,16)},400);
+  const m=document.createElement('video');m.muted=true;m.setAttribute('playsinline','');m.loop=true;m.srcObject=c.captureStream(5);m.style.cssText='position:fixed;left:0;top:0;width:2px;height:2px;opacity:.02;pointer-events:none';document.body.appendChild(m);await m.play();aw=true}catch(e){}}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&running&&'wakeLock' in navigator&&!wl)navigator.wakeLock.request('screen').then(l=>{wl=l;l.addEventListener('release',()=>wl=null)}).catch(()=>{})});
+function loadMP(){return new Promise((ok,no)=>{const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js';s.onload=ok;s.onerror=no;document.head.appendChild(s);setTimeout(no,7000)})}
+async function initMP(){try{await loadMP();const h=new Hands({locateFile:f=>'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/'+f});
+ h.setOptions({maxNumHands:1,modelComplexity:1,minDetectionConfidence:.6,minTrackingConfidence:.6});
+ h.onResults(r=>{const n=performance.now();if(r.multiHandLandmarks&&r.multiHandLandmarks[0]){lm=r.multiHandLandmarks[0];lmT=n}else if(n-lmT>300)lm=null});
+ await Promise.race([h.initialize(),new Promise((_,j)=>setTimeout(j,12000))]);hands=h;mp=true}catch(e){mp=false}}
+function calibrate(){let n=4;cal=null;
+ const iv=setInterval(()=>{
+  if(n>0){msg.textContent=`Show OPEN palm in the centre… ${n}`;n--;return}
+  clearInterval(iv);wx.save();wx.translate(W,0);wx.scale(-1,1);wx.drawImage(v,0,0,W,H);wx.restore();
+  const d=wx.getImageData(W*.4,H*.5,W*.2,H*.2).data;let a=0,b=0,c=0;
+  for(let i=0;i<d.length;i+=4){const[x,y]=cbcr(d[i],d[i+1],d[i+2]);a+=x;b+=y;c++}
+  cal={cb:a/c,cr:b/c};msg.textContent='Calibrated ✔';setTimeout(()=>msg.textContent='',900);setTimeout(()=>openArea=Math.max(count,60),700);
+ },1000)}
+function oneEuro(minC,beta){let xp=null,dp=0,tp=0;return(x,t)=>{if(xp===null){xp=x;tp=t;return x}
+ const te=Math.max((t-tp)/1000,.001),al=f=>{const r=6.2832*f*te;return r/(r+1)};
+ dp+=al(1)*((x-xp)/te-dp);xp+=al(minC+beta*Math.abs(dp))*(x-xp);tp=t;return xp}}
+let fx=oneEuro(.8,25),fy=oneEuro(.8,25),cx=.5,cy=.5,hist=[],anchor=null,dwell=0,hovered=null,last=performance.now(),cool=0,fistN=0,wasPinch=false,pc=0;
+function frame(now){
+ requestAnimationFrame(frame);if(!running)return;
+ const dt=now-last;last=now;let p=null;
+ if(mp){
+  if(!busy&&v.readyState>=2){busy=true;hands.send({image:v}).catch(()=>{}).then(()=>busy=false)}
+  mx.save();mx.translate(80,0);mx.scale(-1,1);mx.drawImage(v,0,0,80,60);mx.restore();
+  if(lm&&now-lmT<400){
+   const dd=(a,b)=>Math.hypot(lm[a].x-lm[b].x,lm[a].y-lm[b].y),sz=dd(0,9)||.1;let f=0;
+   for(const[t,q]of[[8,6],[12,10],[16,14],[20,18]])if(dd(t,0)<dd(q,0))f++;
+   p={x:1-lm[8].x,y:lm[8].y,fist:f>=4,pinch:dd(4,8)<.3*sz&&f<4};
+   mx.fillStyle='#2f6';mx.fillRect((1-lm[8].x)*80-2,lm[8].y*60-2,4,4)}
+ }else if(cal){
+  wx.save();wx.translate(W,0);wx.scale(-1,1);wx.drawImage(v,0,0,W,H);wx.restore();
+  const d=wx.getImageData(0,0,W,H).data,o=mx.createImageData(W,H);let sx=0,sy=0,n=0;
+  for(let y=ROI;y<H;y++)for(let x=0;x<W;x++){const i=(y*W+x)*4,[cb,cr]=cbcr(d[i],d[i+1],d[i+2]);
+   if(Math.abs(cb-cal.cb)<14&&Math.abs(cr-cal.cr)<14&&d[i]+d[i+1]+d[i+2]>120){sx+=x;sy+=y;n++;o.data[i+1]=200;o.data[i+3]=255}
+   else{o.data[i]=d[i]>>1;o.data[i+1]=d[i+1]>>1;o.data[i+2]=d[i+2]>>1;o.data[i+3]=255}}
+  mx.putImageData(o,0,0);count=n;
+  if(n>=25)p={x:sx/n/W,y:(sy/n-ROI)/(H-ROI),fist:openArea>1&&n<openArea*.5,pinch:false};
+ }else return;
+ const dot=$('dot'),cur=$('cur');
+ if(!p){fx=oneEuro(.8,25);fy=oneEuro(.8,25);hist=[];fistN=0;dwell=0;dot.style.opacity=.25;cur.style.setProperty('--p',0);return}
+ dot.style.opacity=1;cx=fx(p.x,now);cy=fy(p.y,now);
+ const px=Math.min(1,Math.max(0,(cx-.5)*1.5+.5))*innerWidth,py=Math.min(1,Math.max(0,(cy-.5)*1.5+.5))*innerHeight;
+ dot.style.transform=cur.style.transform=`translate(${px}px,${py}px)`;
+ hist.push({t:now,x:p.x,y:p.y});hist=hist.filter(h=>now-h.t<350);
+ if(now>cool&&hist.length>4){const a=hist[0],b=hist[hist.length-1],dx=b.x-a.x,dy=b.y-a.y;
+  if(Math.abs(dx)>.17&&Math.abs(dx)>Math.abs(dy)){cool=now+900;hist=[];swipe(dx>0?'right':'left')}
+  else if(Math.abs(dy)>.2&&Math.abs(dy)>Math.abs(dx)*1.5){cool=now+900;hist=[];swipe(dy<0?'up':'down')}}
+ fistN=p.fist?fistN+1:0;
+ if(fistN>7&&now>cool){cool=now+1200;fistN=0;if(screen==='yt'){toast('✊ Play/Pause');act('ytplay')}else if(screen!=='home'){toast('✊ Home');act('home')}}
+ const el=document.elementFromPoint(px,py),t=el&&el.closest&&el.closest('.t');
+ if(hovered&&hovered!==t)hovered.classList.remove('hov');hovered=t;if(t)t.classList.add('hov');
+ if(p.pinch&&!wasPinch&&t&&now>pc){pc=now+600;toast('🤏 Pinch');act(t.dataset.a);dwell=0;anchor=null}
+ wasPinch=p.pinch;
+ if(!anchor||Math.hypot(px-anchor.x,py-anchor.y)>60||!t){anchor={x:px,y:py};dwell=0}else dwell+=dt/(DW*1000);
+ cur.style.setProperty('--p',t?Math.min(dwell,1):0);
+ if(dwell>=1&&t){dwell=0;toast('👆 Select');act(t.dataset.a);anchor=null}
+}
+function swipe(dir){toast({left:'👈 Swipe left',right:'👉 Swipe right',up:'👆 Swipe up',down:'👇 Swipe down'}[dir]);
+ const L=dir==='left';
+ if(dir==='up'||dir==='down'){if(screen==='yt')act(dir==='up'?'ytnext':'ytprev');else if(screen==='feed')act(dir==='up'?'down':'up');return}
+ if(screen==='gallery')act(L?'gnext':'gprev');else if(screen==='music')act(L?'next':'prev');
+ else if(screen==='feed')act(L?'down':'up');else if(screen==='yt')act(L?'ytback':'ytfwd')}
+requestAnimationFrame(frame);
+// ---------- start screen ----------
+S.innerHTML=`<p class="tips">Paste YouTube links (one per line, optional) to make a queue, set the hold time, then start. Your browser will ask for camera permission.</p><textarea id="yl" rows="3" placeholder="https://youtube.com/watch?v=…"></textarea><label class="tips">Hold-to-click time: <b id="dwv">${DW}</b>s<input type="range" id="dw" min="1" max="15" value="${DW}" style="padding:0"></label><button class="btn" id="start">Start camera</button><p class="tips">Tips: good front light, plain background, hand 30–50 cm away. Video stays on your device.</p>${top!==self?'<a class="btn" href="'+location.href+'" target="_blank" rel="noopener">Embedded view? Open in full browser tab</a>':''}`;
+if(!isSecureContext||!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia))S.insertAdjacentHTML('afterbegin','<p style="color:#e5484d;font-weight:600;margin:0">⚠ Camera is blocked here (not https / embedded view). Host this file on https — see steps.</p>');
+$('start').onclick=()=>{const ls=$('yl').value.split('\n').map(x=>x.trim()).filter(Boolean);ytQ=ls.map(vid).filter(Boolean);ytSrc=buildYt(ls[0]);startCam()};
+</script></body></html>
